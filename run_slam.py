@@ -1,42 +1,57 @@
 #!/usr/bin/env python3
 """
 SLAM Runner Script
-Choose to run the original version (MonoGS) or the RTGS version (MonoGS_RTGS) of the SLAM program.
-
-This script dynamically patches configuration files if override paths are provided, 
-ensuring the original repository files remain completely pristine.
-
-Usage Examples:
-    # Basic run with an absolute config path
-    python run_slam.py RTGS --config /full/path/to/config.yaml
-    
-    # Run with dynamically overridden dataset and output directories
-    python run_slam.py original --config configs/rgbd/tum/fr3_office.yaml \
-        --input_path /custom/dataset/path/ \
-        --output_path /custom/output/dir/
+Dynamically handles dataset overrides and flattens 'inherit_from' hierarchies 
+to bypass relative pathing issues in Kaggle/Colab environments.
 """
 
 import sys
-import os
 import subprocess
 import argparse
 import yaml
+import copy
 from pathlib import Path
 
 
-def run_slam(version, config_path, input_path=None, output_path=None):
-    """
-    Executes the SLAM program.
-    
-    Args:
-        version (str): 'original' (MonoGS) or 'RTGS' (MonoGS_RTGS).
-        config_path (str): The exact file path (absolute or relative) to the .yaml config file.
-        input_path (str, optional): If provided, overrides the 'Dataset: dataset_path' key in the config.
-        output_path (str, optional): If provided, overrides the 'Results: save_dir' key in the config.
+def merge_dicts(base, override):
+    """Recursively merge dict 'override' into dict 'base'."""
+    for k, v in override.items():
+        if k in base and isinstance(base[k], dict) and isinstance(v, dict):
+            merge_dicts(base[k], v)
+        else:
+            base[k] = copy.deepcopy(v)
+    return base
+
+
+def flatten_config(config_path, work_dir):
+    """Recursively loads inherited configs and flattens them into a single dictionary."""
+    with open(config_path, 'r') as f:
+        cfg = yaml.safe_load(f)
         
-    Returns:
-        bool: True if execution succeeded, False otherwise.
-    """
+    if 'inherit_from' in cfg:
+        inherit_rel_path = cfg['inherit_from']
+        
+        # MonoGS expects inherit_from paths to be relative to the repo root
+        parent_config_path = work_dir / inherit_rel_path
+        
+        if not parent_config_path.exists():
+            print(f"Error: Could not find inherited config at {parent_config_path}")
+            sys.exit(1)
+            
+        # Load the parent config recursively
+        parent_cfg = flatten_config(parent_config_path, work_dir)
+        
+        # Merge current into parent (child overwrites parent)
+        cfg = merge_dicts(parent_cfg, cfg)
+        
+        # Remove the inherit_from key so the underlying SLAM code doesn't try to parse it
+        if 'inherit_from' in cfg:
+            del cfg['inherit_from']
+            
+    return cfg
+
+
+def run_slam(version, config_path, input_path=None, output_path=None):
     # Determine working directory
     if version.lower() == 'original':
         work_dir = Path('MonoGS').resolve()
@@ -49,7 +64,7 @@ def run_slam(version, config_path, input_path=None, output_path=None):
         return False
     
     if not work_dir.exists():
-        print(f"Error: Directory '{work_dir}' does not exist. Ensure you are running this from the repo root.")
+        print(f"Error: Directory '{work_dir}' does not exist.")
         return False
     
     # Resolve the explicit config path
@@ -59,34 +74,31 @@ def run_slam(version, config_path, input_path=None, output_path=None):
         print(f"Error: Config file '{config_file}' does not exist")
         return False
     
-    run_config_path = str(config_file)
     temp_config_file = None
     
-    if input_path or output_path:
-        print("Applying config overrides...")
-        with open(config_file, 'r') as f:
-            config_data = yaml.safe_load(f)
-            
-        if input_path:
-            if 'Dataset' not in config_data:
-                config_data['Dataset'] = {}
-            config_data['Dataset']['dataset_path'] = input_path
-            print(f"  -> Override input path: {input_path}")
-            
-        if output_path:
-            if 'Results' not in config_data:
-                config_data['Results'] = {}
-            config_data['Results']['save_dir'] = output_path
-            print(f"  -> Override output path: {output_path}")
-            
-        # Create temp config precisely next to the original config
-        # This ensures parent 'inherit_from' relative paths still work
-        temp_config_file = config_file.with_name(config_file.stem + "_temp" + config_file.suffix)
+    print("Flattening config file to bypass relative path errors...")
+    config_data = flatten_config(config_file, work_dir)
         
-        with open(temp_config_file, 'w') as f:
-            yaml.dump(config_data, f)
-            
-        run_config_path = str(temp_config_file)
+    # Apply user overrides
+    if input_path:
+        if 'Dataset' not in config_data:
+            config_data['Dataset'] = {}
+        config_data['Dataset']['dataset_path'] = input_path
+        print(f"  -> Override input path: {input_path}")
+        
+    if output_path:
+        if 'Results' not in config_data:
+            config_data['Results'] = {}
+        config_data['Results']['save_dir'] = output_path
+        print(f"  -> Override output path: {output_path}")
+        
+    # Save the fully flattened config
+    temp_config_file = config_file.with_name(config_file.stem + "_temp" + config_file.suffix)
+    
+    with open(temp_config_file, 'w') as f:
+        yaml.dump(config_data, f)
+        
+    run_config_path = str(temp_config_file)
     
     cmd = [
         sys.executable,
@@ -120,7 +132,7 @@ def run_slam(version, config_path, input_path=None, output_path=None):
         print(f"\nError occurred during execution: {e}")
         return False
     finally:
-        # Guarantee the temporary configuration file is removed
+        # Guarantee cleanup
         if temp_config_file and temp_config_file.exists():
             temp_config_file.unlink()
             print(f"Cleaned up temporary config file: {temp_config_file}")
@@ -128,19 +140,7 @@ def run_slam(version, config_path, input_path=None, output_path=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run the SLAM program with optional dynamic config overrides.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Examples:
-  # Standard execution with a specific config file
-  python run_slam.py original --config /kaggle/working/MonoRTGS-fork/MonoGS/configs/rgbd/tum/fr3_office.yaml
-
-  # Execution with overridden dataset and output paths (ideal for Kaggle/Colab)
-  python run_slam.py RTGS \\
-      --config /kaggle/working/MonoRTGS-fork/MonoGS_RTGS/configs/rgbd/replica/room0.yaml \\
-      --input_path /kaggle/input/datasets/nice-slam-replica/room0/ \\
-      --output_path /kaggle/working/Output_Results/
-        """
+        description="Run the SLAM program with dynamic config flattening."
     )
     
     parser.add_argument(
@@ -159,14 +159,14 @@ Examples:
         '--input_path',
         type=str,
         default=None,
-        help="Override the 'dataset_path' specified in the config file. Useful for pointing to external data mounts."
+        help="Override the 'dataset_path' specified in the config file."
     )
     
     parser.add_argument(
         '--output_path',
         type=str,
         default=None,
-        help="Override the 'save_dir' specified in the config file. Determines where logs/metrics are saved."
+        help="Override the 'save_dir' specified in the config file."
     )
     
     args = parser.parse_args()
