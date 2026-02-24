@@ -1,12 +1,19 @@
 #!/usr/bin/env python3
 """
 SLAM Runner Script
-Choose to run original version (MonoGS) or RTGS version (MonoGS_RTGS) SLAM program based on input parameters
+Choose to run the original version (MonoGS) or the RTGS version (MonoGS_RTGS) of the SLAM program.
 
-Usage:
-    python run_slam.py original tum/fr3_office
-    python run_slam.py RTGS tum/fr3_office
-    python run_slam.py RTGS tum/fr3_office --input_path /kaggle/input/dataset --output_path /kaggle/working/output
+This script dynamically patches configuration files if override paths are provided, 
+ensuring the original repository files remain completely pristine.
+
+Usage Examples:
+    # Basic run with an absolute config path
+    python run_slam.py RTGS --config /full/path/to/config.yaml
+    
+    # Run with dynamically overridden dataset and output directories
+    python run_slam.py original --config configs/rgbd/tum/fr3_office.yaml \
+        --input_path /custom/dataset/path/ \
+        --output_path /custom/output/dir/
 """
 
 import sys
@@ -19,41 +26,40 @@ from pathlib import Path
 
 def run_slam(version, config_path, input_path=None, output_path=None):
     """
-    Run SLAM program
+    Executes the SLAM program.
     
     Args:
-        version (str): 'original' or 'RTGS'
-        config_path (str): config file path, e.g. 'tum/fr3_office'
-        input_path (str, optional): override dataset path
-        output_path (str, optional): override save output directory
+        version (str): 'original' (MonoGS) or 'RTGS' (MonoGS_RTGS).
+        config_path (str): The exact file path (absolute or relative) to the .yaml config file.
+        input_path (str, optional): If provided, overrides the 'Dataset: dataset_path' key in the config.
+        output_path (str, optional): If provided, overrides the 'Results: save_dir' key in the config.
+        
+    Returns:
+        bool: True if execution succeeded, False otherwise.
     """
     # Determine working directory
     if version.lower() == 'original':
-        work_dir = Path('MonoGS')
+        work_dir = Path('MonoGS').resolve()
         print(f"Running original version (MonoGS)")
     elif version.upper() == 'RTGS':
-        work_dir = Path('MonoGS_RTGS')
+        work_dir = Path('MonoGS_RTGS').resolve()
         print(f"Running RTGS version (MonoGS_RTGS)")
     else:
         print(f"Error: Unsupported version '{version}'. Please use 'original' or 'RTGS'")
         return False
     
-    # Check if directory exists
     if not work_dir.exists():
-        print(f"Error: Directory '{work_dir}' does not exist")
+        print(f"Error: Directory '{work_dir}' does not exist. Ensure you are running this from the repo root.")
         return False
     
-    # Build complete config file path
-    full_config_path = f"configs/rgbd/{config_path}.yaml"
-    config_file = work_dir / full_config_path
+    # Resolve the explicit config path
+    config_file = Path(config_path).resolve()
     
-    # Check if config file exists
     if not config_file.exists():
         print(f"Error: Config file '{config_file}' does not exist")
         return False
     
-    # Handle overrides by writing to a temporary config
-    run_config_path = full_config_path
+    run_config_path = str(config_file)
     temp_config_file = None
     
     if input_path or output_path:
@@ -73,37 +79,34 @@ def run_slam(version, config_path, input_path=None, output_path=None):
             config_data['Results']['save_dir'] = output_path
             print(f"  -> Override output path: {output_path}")
             
-        # Create temp config
-        temp_config_name = f"{config_path}_temp.yaml"
-        temp_config_rel_path = f"configs/rgbd/{temp_config_name}"
-        temp_config_file = work_dir / temp_config_rel_path
+        # Create temp config precisely next to the original config
+        # This ensures parent 'inherit_from' relative paths still work
+        temp_config_file = config_file.with_name(config_file.stem + "_temp" + config_file.suffix)
         
         with open(temp_config_file, 'w') as f:
             yaml.dump(config_data, f)
             
-        run_config_path = temp_config_rel_path
+        run_config_path = str(temp_config_file)
     
-    # Build command
     cmd = [
-        sys.executable,  # Use current Python interpreter
+        sys.executable,
         'slam.py',
         '--config',
         run_config_path,
         '--eval'
     ]
     
-    print(f"Working directory: {work_dir.absolute()}")
+    print(f"Working directory: {work_dir}")
     print(f"Config file used: {run_config_path}")
     print(f"Command: {' '.join(cmd)}")
     print("-" * 50)
     
     try:
-        # Switch to working directory and execute command
         result = subprocess.run(
             cmd,
             cwd=work_dir,
             check=True,
-            capture_output=False  # Show output in real-time
+            capture_output=False
         )
         print(f"\nSLAM program execution completed, exit code: {result.returncode}")
         return True
@@ -117,7 +120,7 @@ def run_slam(version, config_path, input_path=None, output_path=None):
         print(f"\nError occurred during execution: {e}")
         return False
     finally:
-        # Cleanup temp config if it was created so the directory stays pristine
+        # Guarantee the temporary configuration file is removed
         if temp_config_file and temp_config_file.exists():
             temp_config_file.unlink()
             print(f"Cleaned up temporary config file: {temp_config_file}")
@@ -125,45 +128,49 @@ def run_slam(version, config_path, input_path=None, output_path=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Run SLAM program - supports original and RTGS versions",
+        description="Run the SLAM program with optional dynamic config overrides.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  python run_slam.py original tum/fr3_office
-  python run_slam.py RTGS tum/fr3_office
-  python run_slam.py RTGS replica/office0 --input_path /kaggle/input/replica/office0 --output_path /kaggle/working/output
+  # Standard execution with a specific config file
+  python run_slam.py original --config /kaggle/working/MonoRTGS-fork/MonoGS/configs/rgbd/tum/fr3_office.yaml
+
+  # Execution with overridden dataset and output paths (ideal for Kaggle/Colab)
+  python run_slam.py RTGS \\
+      --config /kaggle/working/MonoRTGS-fork/MonoGS_RTGS/configs/rgbd/replica/room0.yaml \\
+      --input_path /kaggle/input/datasets/nice-slam-replica/room0/ \\
+      --output_path /kaggle/working/Output_Results/
         """
     )
     
     parser.add_argument(
         'version',
         choices=['original', 'RTGS'],
-        help='Choose version: original (MonoGS) or RTGS (MonoGS_RTGS)'
+        help="Choose the SLAM version to run: 'original' (MonoGS) or 'RTGS' (MonoGS_RTGS)."
     )
     
     parser.add_argument(
-        'config',
-        help='Config file path (without .yaml extension), e.g.: tum/fr3_office, replica/office0'
+        '--config',
+        required=True,
+        help="The exact path (absolute or relative) to the .yaml config file."
     )
     
-    # New Arguments
     parser.add_argument(
         '--input_path',
         type=str,
         default=None,
-        help='Override the Dataset path in the config'
+        help="Override the 'dataset_path' specified in the config file. Useful for pointing to external data mounts."
     )
     
     parser.add_argument(
         '--output_path',
         type=str,
         default=None,
-        help='Override the Results save directory in the config'
+        help="Override the 'save_dir' specified in the config file. Determines where logs/metrics are saved."
     )
     
     args = parser.parse_args()
     
-    # Run SLAM
     success = run_slam(args.version, args.config, args.input_path, args.output_path)
     
     if success:
