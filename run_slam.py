@@ -6,22 +6,26 @@ Choose to run original version (MonoGS) or RTGS version (MonoGS_RTGS) SLAM progr
 Usage:
     python run_slam.py original tum/fr3_office
     python run_slam.py RTGS tum/fr3_office
+    python run_slam.py RTGS tum/fr3_office --input_path /kaggle/input/dataset --output_path /kaggle/working/output
 """
 
 import sys
 import os
 import subprocess
 import argparse
+import yaml
 from pathlib import Path
 
 
-def run_slam(version, config_path):
+def run_slam(version, config_path, input_path=None, output_path=None):
     """
     Run SLAM program
     
     Args:
         version (str): 'original' or 'RTGS'
         config_path (str): config file path, e.g. 'tum/fr3_office'
+        input_path (str, optional): override dataset path
+        output_path (str, optional): override save output directory
     """
     # Determine working directory
     if version.lower() == 'original':
@@ -48,17 +52,48 @@ def run_slam(version, config_path):
         print(f"Error: Config file '{config_file}' does not exist")
         return False
     
+    # Handle overrides by writing to a temporary config
+    run_config_path = full_config_path
+    temp_config_file = None
+    
+    if input_path or output_path:
+        print("Applying config overrides...")
+        with open(config_file, 'r') as f:
+            config_data = yaml.safe_load(f)
+            
+        if input_path:
+            if 'Dataset' not in config_data:
+                config_data['Dataset'] = {}
+            config_data['Dataset']['dataset_path'] = input_path
+            print(f"  -> Override input path: {input_path}")
+            
+        if output_path:
+            if 'Results' not in config_data:
+                config_data['Results'] = {}
+            config_data['Results']['save_dir'] = output_path
+            print(f"  -> Override output path: {output_path}")
+            
+        # Create temp config
+        temp_config_name = f"{config_path}_temp.yaml"
+        temp_config_rel_path = f"configs/rgbd/{temp_config_name}"
+        temp_config_file = work_dir / temp_config_rel_path
+        
+        with open(temp_config_file, 'w') as f:
+            yaml.dump(config_data, f)
+            
+        run_config_path = temp_config_rel_path
+    
     # Build command
     cmd = [
         sys.executable,  # Use current Python interpreter
         'slam.py',
         '--config',
-        full_config_path,
+        run_config_path,
         '--eval'
     ]
     
     print(f"Working directory: {work_dir.absolute()}")
-    print(f"Config file: {full_config_path}")
+    print(f"Config file used: {run_config_path}")
     print(f"Command: {' '.join(cmd)}")
     print("-" * 50)
     
@@ -81,6 +116,11 @@ def run_slam(version, config_path):
     except Exception as e:
         print(f"\nError occurred during execution: {e}")
         return False
+    finally:
+        # Cleanup temp config if it was created so the directory stays pristine
+        if temp_config_file and temp_config_file.exists():
+            temp_config_file.unlink()
+            print(f"Cleaned up temporary config file: {temp_config_file}")
 
 
 def main():
@@ -91,8 +131,7 @@ def main():
 Examples:
   python run_slam.py original tum/fr3_office
   python run_slam.py RTGS tum/fr3_office
-  python run_slam.py original replica/office0
-  python run_slam.py RTGS replica/office0
+  python run_slam.py RTGS replica/office0 --input_path /kaggle/input/replica/office0 --output_path /kaggle/working/output
         """
     )
     
@@ -107,10 +146,25 @@ Examples:
         help='Config file path (without .yaml extension), e.g.: tum/fr3_office, replica/office0'
     )
     
+    # New Arguments
+    parser.add_argument(
+        '--input_path',
+        type=str,
+        default=None,
+        help='Override the Dataset path in the config'
+    )
+    
+    parser.add_argument(
+        '--output_path',
+        type=str,
+        default=None,
+        help='Override the Results save directory in the config'
+    )
+    
     args = parser.parse_args()
     
     # Run SLAM
-    success = run_slam(args.version, args.config)
+    success = run_slam(args.version, args.config, args.input_path, args.output_path)
     
     if success:
         print("Program execution successful!")
@@ -120,4 +174,4 @@ Examples:
 
 
 if __name__ == "__main__":
-    main() 
+    main()
