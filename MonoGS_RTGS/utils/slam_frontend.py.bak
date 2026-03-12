@@ -386,19 +386,17 @@ class FrontEnd(mp.Process):
                     self.dataset, cur_frame_idx, projection_matrix
                 )
                 
-                ## Downsample every 4 frames
-                #if self.frame_counter % 4 == 0:
-                    ## Downsample the image by 2x
-                    #original_image = viewpoint.original_image
-                    
-                    #if len(original_image.shape) == 3:  # RGB image
-                        #h, w, c = original_image.shape
-                        
-                        #downsampled_image = cv2.resize(original_image, (w//2, h//2), interpolation=cv2.INTER_AREA)
-                        #viewpoint.original_image = downsampled_image
-                        #viewpoint.image_height = h//2
-                        #viewpoint.image_width = w//2
-
+                # Downsample every 4 frames
+                if self.frame_counter % 4 == 0:
+                    # Downsample the image by 2x
+                    original_image = viewpoint.original_image
+                    if len(original_image.shape) == 3:  # RGB image
+                        h, w, c = original_image.shape
+                        downsampled_image = cv2.resize(original_image, (w//2, h//2), interpolation=cv2.INTER_AREA)
+                        viewpoint.original_image = downsampled_image
+                        viewpoint.image_height = h//2
+                        viewpoint.image_width = w//2
+                
                 viewpoint.compute_grad_mask(self.config)
 
                 self.cameras[cur_frame_idx] = viewpoint

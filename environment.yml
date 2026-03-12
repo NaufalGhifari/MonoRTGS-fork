@@ -13,8 +13,9 @@ dependencies:
   - torchvision=0.13.1
   - tqdm
   - pip:
-    - MonoGS/submodules/simple-knn
-    - MonoGS/submodules/diff-gaussian-rasterization
+    # for stability during initial build, please install submodules individually after initial build.
+    #  - MonoGS/submodules/simple-knn
+    #  - MonoGS/submodules/diff-gaussian-rasterization
     - opencv-python==4.8.1.78
     - munch
     - trimesh
